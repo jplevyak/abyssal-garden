@@ -45,6 +45,8 @@ Nothing to install, and it works offline. It needs a browser with **WebGPU**. If
 | Performance stats | `H` |
 | Detail level | **Low**, **Medium** or **High** in the menu (reloads the page) |
 
+The sea has no edge: keep swimming and new seabed, kelp, rocks and fish are made ahead of you, while what you left behind is let go. The hand-made scenes (the ship, the whale tail, the grotto) are around where you start. Press `1` to `6` to jump back to them.
+
 The seabed, cliffs and arches are solid: you glide along the rock instead of swimming into it, and you still fit through every tunnel and arch. Kelp, plants, corals, sponges, loose rocks, the floating boulders, the ship and the whale tail you can swim through.
 
 **On a touchscreen:** hold one finger down to swim forward and slide it to steer. Put a second finger down to go faster. The `≡` button in the corner opens the menu. Phones always show the scene in landscape and start on Low or Medium detail. (Touch support is experimental.)
@@ -63,7 +65,7 @@ If loading crashes the tab, or the graphics driver gives up, the page starts aga
 
 ## How it works
 
-- The seabed is sculpted on your graphics card every time the page opens, then decorated with about two million kelp leaves and plants, tens of thousands of rocks, and thousands of sponges, corals and fish.
+- The seabed is sculpted on your graphics card as you swim, in square chunks 96 m across: the chunks within about 200 m of you are kept, each is made from the same seed every time (so a place you come back to is the same place), and each is decorated with kelp, plants, rocks, sponges, corals and fish. Building a chunk is cut into small steps between frames, so swimming stays smooth. Only the part of the sea around you is in memory, however far you go (the noise stays clean for tens of kilometres).
 - Everything is drawn with **WebGPU** directly. No game engine or 3D library is used.
 - The ship, whale tail, mantas, fish and corals are built from simple mathematical shapes.
 - The sound is synthesized live with the Web Audio API.
@@ -85,9 +87,9 @@ This writes a new `index.html` next to this README. `npm run build:readable` wri
 
 | File | What's inside |
 |---|---|
-| [`source/src/world.js`](source/src/world.js) | The world layout: rock walls, arches, tunnels, kelp forests, sponge gardens, fish schools, mantas, the ship and the whale tail. **A good place to start.** |
+| [`source/src/world.js`](source/src/world.js) | The world layout: rock walls, arches, tunnels, kelp forests, sponge gardens, fish schools, mantas, the ship and the whale tail. **A good place to start.** Each chunk of the endless sea is made here (`makeChunk`). |
 | [`source/src/shaders.js`](source/src/shaders.js) | The look: water and fog colors, lighting, kelp, rocks, the water surface and light rays (WGSL shader code) |
-| [`source/src/main.js`](source/src/main.js) | The renderer, the camera, the controls, the six viewpoints and the camera path the world is laid out around |
+| [`source/src/main.js`](source/src/main.js) | The renderer, the camera, the controls, the chunk streaming, the rolling shadow map, the six viewpoints and the camera path the start area is laid out around |
 | [`source/src/audio.js`](source/src/audio.js) | The soundscape |
 | [`source/src/quality.js`](source/src/quality.js) | The detail levels: which one a device starts on, and what is remembered between visits |
 | [`source/src/math.js`](source/src/math.js) | Noise, random numbers and mesh-building helpers |

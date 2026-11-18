@@ -1,7 +1,7 @@
 // ============================================================================
 // math + procedural helpers (load-time only unless noted)
 // ============================================================================
-const { sin, cos, sqrt, min, max, abs, floor, PI, pow, atan2, hypot, exp, round } = Math;
+const { sin, cos, sqrt, min, max, abs, floor, ceil, PI, pow, atan2, hypot, exp, round } = Math;
 const TAU = PI * 2;
 let _seed = 20261110;
 const rnd = () => {
@@ -51,18 +51,24 @@ const qFromY = (nx, ny, nz) => {
 };
 
 // world grid
-const NX = 512, NY = 80, NZ = 512, VS = 0.75, OX = -192, OY = -56, OZ = -192;
-const CELLS = 16, CELLW = 24; // culling grid over XZ
+// The world is endless: a window of CHK-metre square chunks around the camera is generated on demand. Voxels are VS
+// metres, on a grid anchored at the world origin (chunk i covers voxels CVX*i .. CVX*i+CVX-1). A chunk's density grid
+// is GN voxels wide: its CVX core voxels plus MG on each side, so neighbouring chunks agree on the rock between them.
+const NY = 80, VS = 0.75, OY = -56, CHK = 96, CVX = 128, MG = 4, GN = CVX + 2 * MG;
+const CELLS = 4, CELLW = 24; // culling grid over XZ, per chunk
+const RAD = 2, KS = 7; // chunks kept around the camera's (radius), and chunk slots per side in the windowed textures
 const NCHUNK = 7; // 3 small + 3 large rock chunk meshes + pebbles
 
 // ---------------------------------------------------------------- naive surface nets
 // D: scalar field (>0 inside), dims nx,ny,nz. Returns grid-space positions + triangle indices.
-function surfaceNets(D, nx, ny, nz) {
+// Quads are made for the edges that start in [x0,x1) x [z0,z1) only, so every edge belongs to exactly one chunk.
+function* surfaceNets(D, nx, ny, nz, x0, x1, z0, z1) {
   let pos = new Float32Array(1 << 20), nv = 0;
   let idx = new Uint32Array(1 << 21), ni = 0;
   const sl = nx * ny;
   let cur = new Int32Array(sl), prev = new Int32Array(sl);
   for (let z = 0; z < nz - 1; z++) {
+    if (!(z & 3)) yield;
     for (let y = 0; y < ny - 1; y++) {
       let i0 = nx * (y + ny * z);
       for (let x = 0; x < nx - 1; x++, i0++) {
@@ -91,17 +97,18 @@ function surfaceNets(D, nx, ny, nz) {
         if (ni + 18 > idx.length) { const i2 = new Uint32Array(idx.length * 2); i2.set(idx); idx = i2; }
         const s0 = d0 > 0;
         let a, b, c, d;
-        if ((d1 > 0) !== s0 && y > 0 && z > 0) {
+        const own = x >= x0 && x < x1 && z >= z0 && z < z1;
+        if (own && (d1 > 0) !== s0 && y > 0 && z > 0) {
           a = vi; b = cur[ci - nx]; c = prev[ci - nx]; d = prev[ci];
           if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
           else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
         }
-        if ((d2 > 0) !== s0 && x > 0 && z > 0) {
+        if (own && (d2 > 0) !== s0 && x > 0 && z > 0) {
           a = vi; b = prev[ci]; c = prev[ci - 1]; d = cur[ci - 1];
           if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
           else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
         }
-        if ((d4 > 0) !== s0 && x > 0 && y > 0) {
+        if (own && (d4 > 0) !== s0 && x > 0 && y > 0) {
           a = vi; b = cur[ci - 1]; c = cur[ci - 1 - nx]; d = cur[ci - nx];
           if (s0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
           else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; }
@@ -112,6 +119,9 @@ function surfaceNets(D, nx, ny, nz) {
   }
   return { pos: pos.subarray(0, nv * 3), idx: idx.subarray(0, ni), nv, ni };
 }
+
+// the whole grid at once, without waiting between slices
+function surfaceNetsAll(D, nx, ny, nz) { const g = surfaceNets(D, nx, ny, nz, 0, nx, 0, nz); let r; while (!(r = g.next()).done); return r.value; }
 
 // trilinear sampler factory over a scalar grid (grid coords)
 const sampler3 = (D, nx, ny, nz) => (x, y, z) => {
