@@ -54,10 +54,74 @@ const qFromY = (nx, ny, nz) => {
 // The world is endless: a window of CHK-metre square chunks around the camera is generated on demand. Voxels are VS
 // metres, on a grid anchored at the world origin (chunk i covers voxels CVX*i .. CVX*i+CVX-1). A chunk's density grid
 // is GN voxels wide: its CVX core voxels plus MG on each side, so neighbouring chunks agree on the rock between them.
-const NY = 80, VS = 0.75, OY = -56, CHK = 96, CVX = 128, MG = 4, GN = CVX + 2 * MG;
+// NY reaches 15 m above the sea so that islands can rise out of it.
+const NY = 96, VS = 0.75, OY = -56, CHK = 96, CVX = 128, MG = 4, GN = CVX + 2 * MG;
+const YTOP = OY + (NY - 1) * VS;
 const CELLS = 4, CELLW = 24; // culling grid over XZ, per chunk
 const RAD = 2, KS = 7; // chunks kept around the camera's (radius), and chunk slots per side in the windowed textures
 const NCHUNK = 7; // 3 small + 3 large rock chunk meshes + pebbles
+
+// ---------------------------------------------------------------- ocean swell
+// A sum of Gerstner waves: long swells from one direction with a spread of shorter ones across it. Deep-water dispersion
+// (w = sqrt(g k)) sets each wave's speed, so the long ones outrun the short ones as at sea. Per wave: wavelength (m),
+// amplitude (m), angle from the main direction (rad), phase. The same numbers drive the surface mesh (shaders.js) and
+// the swimmer's ceiling (swellY), so the two always agree.
+const SWELL_DIR = 0.55, SWELL_Q = 3; // Q: crest sharpness, sum of Q k A stays well below 1 so crests never fold over
+const SWELL = [[150, 0.42, 0, 0], [96, 0.3, 0.22, 1.9], [64, 0.2, -0.3, 4.1], [41, 0.13, 0.45, 0.7],
+  [27, 0.08, -0.55, 2.8], [18, 0.055, 0.8, 5.3], [12.5, 0.035, -0.9, 3.6], [8.7, 0.022, 1.2, 0.4]]
+  .map(([L, A, a, ph]) => { const k = TAU / L; return [cos(SWELL_DIR + a), sin(SWELL_DIR + a), k, A, sqrt(9.81 * k), ph, L]; });
+// the surface mesh: rings x segments of a disc around the camera
+const SURF_R = LV > 1 ? 64 : 96, SURF_S = LV > 1 ? 96 : 128;
+// height of the surface above (x, z) at time t: Gerstner waves also move water sideways, so first find the rest point
+// that ends up over (x, z) (a few fixed-point steps), then take its height
+function swellY(x, z, t) {
+  let px = x, pz = z, y = 0;
+  for (let it = 0; it < 4; it++) {
+    let dx = 0, dz = 0; y = 0;
+    for (const [Dx, Dz, k, A, w, ph] of SWELL) {
+      const th = k * (Dx * px + Dz * pz) - w * t + ph, c = cos(th);
+      dx += SWELL_Q * A * Dx * c; dz += SWELL_Q * A * Dz * c; y += A * sin(th);
+    }
+    px = x - dx; pz = z - dz;
+  }
+  return y;
+}
+
+// ---------------------------------------------------------------- sandy islands
+// One candidate per ISLE m square cell (about half of them have one), none near the start, plus one designed island east
+// of it. An island is [x, z, R, H, p1, p2, p3]: coast radius R (the coast wanders +-27% around it with the angle), peak
+// H m above the sea, phases p1..p3 for the coast and the dunes. Its height profile (isleH, and isl in the density shader,
+// which must agree) is a dome of dunes on land, then a sandy shelf that drops to the sea floor within ISLE_SLOPE m.
+const ISLE = 320, ISLE_SLOPE = 62;
+const ISLANDS = [[200, -20, 42, 7.5, 1.1, 4.2, 2.6]];
+const isleFoot = (I) => I[2] * 1.27 + ISLE_SLOPE;
+function islesNear(x0, z0, x1, z1) {
+  const out = [];
+  const hit = (I) => { const r = isleFoot(I); return I[0] + r > x0 && I[0] - r < x1 && I[1] + r > z0 && I[1] - r < z1; };
+  for (const I of ISLANDS) if (hit(I)) out.push(I);
+  for (let a = floor((x0 - 200) / ISLE); a <= floor((x1 + 200) / ISLE); a++) for (let b = floor((z0 - 200) / ISLE); b <= floor((z1 + 200) / ISLE); b++) {
+    const r = (k) => ihash(a, b, 90 + k), x = (a + 0.25 + 0.5 * r(1)) * ISLE, z = (b + 0.25 + 0.5 * r(2)) * ISLE, R = 26 + 30 * r(3);
+    if (r(0) > 0.5 || hypot(x, z) < 330 + R) continue;
+    const I = [x, z, R, min(3 + R * 0.12 * (0.4 + r(4)), 10.5), r(5) * TAU, r(6) * TAU, r(7) * TAU];
+    if (hit(I)) out.push(I);
+  }
+  return out;
+}
+// height of the island ground (without the rock) at (x, z): -1e3 away from all of them
+function isleH(isles, x, z) {
+  let h = -1e3;
+  for (const [cx, cz, R, H, p1, p2, p3] of isles) {
+    const dx = x - cx, dz = z - cz, r = hypot(dx, dz), th = atan2(dz, dx);
+    const Rm = R * (1 + 0.14 * sin(3 * th + p1) + 0.08 * sin(5 * th + p2) + 0.05 * sin(8 * th + p3)), e = r - Rm;
+    let y;
+    if (e < 0) {
+      const s = r / Rm, b = H * pow(max(1 - s * s, 0), 1.4);
+      y = b + (sin(x * 0.21 + p1 * 3) * sin(z * 0.17 + p2 * 3) * 0.5 + sin((x * 0.6 - z * 0.8) * 0.11 + p3) * 0.4) * sstep(0.3, 2.5, b);
+    } else y = -0.09 * e - 0.012 * e * e;
+    h = max(h, y);
+  }
+  return h;
+}
 
 // ---------------------------------------------------------------- naive surface nets
 // D: scalar field (>0 inside), dims nx,ny,nz. Returns grid-space positions + triangle indices.

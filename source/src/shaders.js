@@ -27,7 +27,7 @@ fn wor(p: vec3f) -> f32 {
 
 // ---------------------------------------------------------------- terrain density (compute)
 const W_DENS = W_NOISE + /*wgsl*/`
-struct U { n: vec4u, o: vec4f, c: vec4u }; // n.w: first z layer of this dispatch
+struct U { n: vec4u, o: vec4f, c: vec4u, e: vec4u }; // n.w: first z layer of this dispatch, e.x: islands
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var<storage, read_write> D: array<f32>;
 @group(0) @binding(2) var<storage, read> P: array<vec4f>;
@@ -77,7 +77,25 @@ fn dens(p: vec3f) -> f32 {
     let a = P[k]; let b = P[k + 1u]; k += 2u;
     d = smin(d, seg3(p + w * 2., a.xyz, b.xyz) - a.w, 2.);
   }
-  return min(d, 3. - p.y);
+  d = min(d, 3. - p.y);
+  // sandy islands (isleH in math.js): smooth sand laid over the rock, which only shows where it stands out of it
+  let ki = (u.c.x + u.c.y + u.c.z + u.c.w) * 2u;
+  var ih = -1e3;
+  for (var i = 0u; i < u.e.x; i++) {
+    let a = P[ki + i * 2u]; let b = P[ki + i * 2u + 1u];
+    let dv = p.xz - a.xy; let r = length(dv); let th = atan2(dv.y, dv.x);
+    let Rm = a.z * (1. + .14 * sin(3. * th + b.x) + .08 * sin(5. * th + b.y) + .05 * sin(8. * th + b.z)); let e = r - Rm;
+    var y = -.09 * e - .012 * e * e;
+    if (e < 0.) {
+      let s = r / Rm; let bb = a.w * pow(max(1. - s * s, 0.), 1.4);
+      y = bb + (sin(p.x * .21 + b.x * 3.) * sin(p.z * .17 + b.y * 3.) * .5 + sin((p.x * .6 - p.z * .8) * .11 + b.z) * .4) * ss(.3, 2.5, bb);
+    }
+    ih = max(ih, y);
+  }
+  // where an island rises off the sea floor the rock stays under its sand
+  if (ih > -46.) { d = mix(d, smin(d, ih - .4 - p.y, 2.), ss(-44., -36., ih)); }
+  d = smax(d, ih - p.y, 1.5);
+  return min(d, ${YTOP - 1.5} - p.y);
 }
 @compute @workgroup_size(4, 4, 4) fn main(@builtin(global_invocation_id) id: vec3u) {
   let c = vec3u(id.x, id.y, id.z + u.n.w);
@@ -214,6 +232,25 @@ fn fogIn(ro: vec3f, rd: vec3f, d: f32, z: f32, sun: vec3f) -> vec3f {
   let m2 = mu * mu;
   return mix(WCOL, PCOL, z) * sg(z) * exp(k * ro.y) * I * (1.22 + .3 * m2 * m2);
 }
+// ocean swell (see SWELL in math.js): SW = direction, wavenumber, amplitude; SWB = angular speed, phase, wavelength
+const SWQ = ${SWELL_Q}.;
+const SW = array<vec4f, ${SWELL.length}>(${SWELL.map((w) => `vec4f(${w.slice(0, 4).map((v) => v.toFixed(6)).join(', ')})`).join(', ')});
+const SWB = array<vec3f, ${SWELL.length}>(${SWELL.map((w) => `vec3f(${w.slice(4, 7).map((v) => v.toFixed(6)).join(', ')})`).join(', ')});
+struct Sw { o: vec3f, n: vec3f }
+// the water at rest point p (xz) at time t: o = where it has moved to (relative to p), n = the up-facing normal (not unit).
+// Waves too short for the mesh at distance d are faded out.
+fn swell(p: vec2f, t: f32, d: f32) -> Sw {
+  var o = vec3f(0.); var tx = vec3f(1., 0., 0.); var tz = vec3f(0., 0., 1.);
+  for (var i = 0; i < ${SWELL.length}; i++) {
+    let a = SW[i]; let b = SWB[i];
+    let A = a.w * ss(8. * b.z, 4. * b.z, d); let kA = a.z * A;
+    let th = a.z * dot(a.xy, p) - b.x * t + b.y; let c = cos(th); let s = sin(th);
+    o += vec3f(SWQ * A * a.x * c, A * s, SWQ * A * a.y * c);
+    tx += vec3f(-SWQ * kA * a.x * a.x * s, kA * a.x * c, -SWQ * kA * a.x * a.y * s);
+    tz += vec3f(-SWQ * kA * a.x * a.y * s, kA * a.y * c, -SWQ * kA * a.y * a.y * s);
+  }
+  return Sw(o, cross(tz, tx));
+}
 `;
 
 const S_B = S_G + /*wgsl*/`
@@ -241,6 +278,11 @@ fn shadow9(p: vec3f) -> f32 {
   for (var x = -1; x <= 1; x++) { for (var y = -1; y <= 1; y++) { a += textureSampleCompareLevel(tSh, sS, s.xy + vec2f(f32(x), f32(y)) * e, s.z); } }
   return a / 9.;
 }
+const HAZE = vec3f(.64, .79, 1.) * 1.25;
+const HAZEK = .0009;
+const WUP = .55; // the light the water scatters back up, against the light it scatters sideways under water
+fn air() -> bool { return g.mis.w > .5; } // the camera is above the water
+fn wa(y: f32) -> f32 { return ss(-.3, .3, y); } // 0 under the water, 1 in the air
 fn cuv(p: vec3f) -> vec2f { return p.xz - g.sun.xz * (p.y / g.sun.y); }
 fn caus(p: vec3f, d: f32) -> vec3f {
   let q = cuv(p);
@@ -248,26 +290,57 @@ fn caus(p: vec3f, d: f32) -> vec3f {
   let a = vec3f(textureSample(tW, sR, q / 3.3 + o).r, textureSample(tW, sR, q / 3.3).r, textureSample(tW, sR, q / 3.3 - o).r);
   let b = textureSample(tW, sR, q.yx / 6.9 + .37).r;
   let c = min(pow(a, vec3f(2.3)) * 5. * (.45 + b * 1.3), vec3f(4.));
-  return mix(c, vec3f(.33), ss(35., 100., d));
+  return mix(c, vec3f(.33), max(ss(35., 100., d), ss(-2.5, .2, p.y))); // caustics need a few metres of water to focus
 }
 fn caus2(p: vec3f, d: f32) -> f32 {
   let q = cuv(p);
   let c = min(pow(textureSample(tW, sR, q / 4.1).r, 1.4) * 2.6 * (.45 + textureSample(tW, sR, q.yx / 6.9 + .37).r * 1.3), 2.6);
-  return mix(c, .33, ss(35., 100., d));
+  return mix(c, .33, max(ss(35., 100., d), ss(-2.5, .2, p.y)));
 }
-fn sunE(y: f32, z: f32) -> vec3f { return SUNC * exp(kd(z) * (min(y, 0.) / g.sun.y)) * (.5 + .5 * sat(-y / 30.)); }
+fn sunE(y: f32, z: f32) -> vec3f { return mix(SUNC * exp(kd(z) * (min(y, 0.) / g.sun.y)) * (.5 + .5 * sat(-y / 30.)), SUNC, wa(y)); }
 // the volume and the ground map are windows of ${KS} x ${KS} chunks that wrap around: a chunk's slot is its index modulo ${KS}
-fn vol(p: vec3f) -> vec4f { return textureSampleLevel(tV, sV, vec3f(p.x, p.y + 56., p.z) / vec3f(${KS * CHK}., 60., ${KS * CHK}.), 0.); }
+fn vol(p: vec3f) -> vec4f { return textureSampleLevel(tV, sV, vec3f(p.x, p.y + ${-OY}., p.z) / vec3f(${KS * CHK}., ${NY * VS}., ${KS * CHK}.), 0.); }
 fn amb(p: vec3f, n: vec3f, sky: f32, z: f32) -> vec3f {
   let up = n.y * .5 + .5;
-  return mix(vec3f(.22, .60, .80), vec3f(.34, .56, .82), z) * exp(kd(z) * min(p.y, 0.) * 1.2) * (.3 + .7 * sky) * (.24 + .76 * up * up) * 1.3 * (.55 + .45 * sat(-p.y / 30.)) + vec3f(.003, .010, .016);
+  let w = mix(vec3f(.22, .60, .80), vec3f(.34, .56, .82), z) * exp(kd(z) * min(p.y, 0.) * 1.2) * (.3 + .7 * sky) * (.24 + .76 * up * up) * 1.3 * (.55 + .45 * sat(-p.y / 30.)) + vec3f(.003, .010, .016);
+  // in the air: blue sky above, warm light bounced off the sand below
+  let a = mix(vec3f(.30, .26, .20) * .45, vec3f(.42, .58, .92) * .75, up) * (.35 + .65 * sky);
+  return mix(w, a, wa(p.y));
 }
 fn zone(p: vec3f) -> f32 { return mix(g.sun.w, textureSampleLevel(tM, sM, p.xz / ${KS * CHK}., 0.).b, .2); }
-fn side(p: vec3f, n: vec3f, open: f32, z: f32) -> vec3f { return mix(WCOL, PCOL, z) * exp(kd(z) * min(p.y, 0.)) * open * (1. - abs(n.y)) * .7; }
+fn side(p: vec3f, n: vec3f, open: f32, z: f32) -> vec3f { return mix(WCOL, PCOL, z) * exp(kd(z) * min(p.y, 0.)) * open * (1. - abs(n.y)) * .7 * (1. - wa(p.y)); }
 // skylight at most 150 m along the ray: past that, terrain and the background behind it (vsB) get the same haze
 fn fog(c: vec3f, wp: vec3f, z: f32) -> vec3f {
   let v = wp - g.cam.xyz; let d = length(v); let rd = v / d;
+  if (air()) { return fogA(c, wp, z); }
   return c * exp(-sg(z) * d) * ss(200., 160., d) + fogIn(g.cam.xyz, rd, d, z, g.sun.xyz) * (.58 + .42 * vol(g.cam.xyz + rd * min(d, 150.)).g);
+}
+// ---- above the water (g.mis.w = 1: the camera is in the air)
+// the sky: haze at the horizon, deep blue overhead, the sun, and a layer of drifting clouds
+fn skyA(rd: vec3f) -> vec3f {
+  let y = max(rd.y, 0.);
+  var c = mix(HAZE, vec3f(.10, .33, .95) * 1.2, pow(y, .5));
+  let uv = rd.xz / max(rd.y, .03) * .045 + g.cam.w * vec2f(.0011, .0004);
+  let a = textureSampleLevel(tD, sR, uv, 1.).a; let b = textureSampleLevel(tD, sR, uv * 2.7 + .31, 0.).a;
+  let cl = ss(.56, .8, a * .72 + b * .38) * ss(0., .14, rd.y);
+  let mu = max(dot(rd, g.sun.xyz), 0.);
+  c = mix(c, vec3f(1.85, 1.85, 1.9) * (.72 + .35 * b), cl * .85);
+  c += vec3f(1., .85, .6) * (pow(mu, 12.) * .45 + pow(mu, 180.) * 1.8);
+  return c + SUNC * 45. * ss(.9996, .99985, mu) * (1. - cl);
+}
+// deep water seen from the air, along rd (pointing down)
+fn deepA(rd: vec3f, z: f32) -> vec3f { return fogIn(vec3f(0.), rd, 1e3, z, g.sun.xyz) * WUP; }
+// From the air: a point under the water is seen through the water below the surface (the surface itself is drawn on
+// top); past the draw distance the land fades to the sky and the sea floor to deep water; then haze over the whole way.
+fn fogA(c: vec3f, wp: vec3f, z: f32) -> vec3f {
+  let v = wp - g.cam.xyz; let d = length(v); let rd = v / d;
+  var col = c;
+  if (wp.y < 0.) {
+    let dw = d * min(-wp.y / max(g.cam.y - wp.y, 1e-3), 1.);
+    col = c * exp(-sg(z) * dw) + fogIn(wp - rd * dw, rd, dw, z, g.sun.xyz) * WUP;
+    col = mix(deepA(rd, z), col, ss(200., 160., d));
+  } else { col = mix(skyA(rd), col, ss(200., 160., d)); }
+  return mix(HAZE, col, exp(-d * HAZEK));
 }
 fn qrot(q: vec4f, v: vec3f) -> vec3f { return v + 2. * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 `;
@@ -283,6 +356,12 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n
   if (i.c.x < 1.5 && i.c.z > 1.5 && g.res.x > 0.) { sc *= 1. - ss(i.c.z * .7, i.c.z, distance(i.a.xyz, g.cam.xyz) / g.mis.z); }
   var w = i.a.xyz + qrot(i.b, i.p * sc);
   w.y += sin(g.cam.w * .3 + i.c.y * 40.) * i.c.w;
+  if (abs(i.c.x - 6.) < .5) { // palm: the trunk bends in the wind, the fronds flutter
+    let t = g.cam.w; let ph = i.c.y * 40.; let h = max(i.p.y, 0.) * sc;
+    w.x += (sin(t * .7 + ph) * .6 + sin(t * 1.9 + ph * 1.3) * .25) * .0018 * h * h;
+    w.z += (cos(t * .55 + ph * .7) * .5 + sin(t * 1.7 + ph) * .2) * .0018 * h * h;
+    w.y += max(i.n.w, 0.) * sin(t * 2.6 + ph + i.p.x * 1.3 + i.p.z * 1.1) * .14 * sc;
+  }
   o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = qrot(i.b, i.n.xyz); o.op = i.p * i.a.w + i.c.y * 37.; o.on = i.n.xyz;
   o.m = i.c; o.q = i.b; o.ao = i.n.w;
   return o;
@@ -313,7 +392,7 @@ fn tri(p: vec3f, n: vec3f, s: f32) -> TP {
   let gm = textureSample(tM, sM, i.wp.xz / ${KS * CHK}.);
   let ca = caus(i.wp, dist);
   let hgt = A.h * .5 + B.h * .35 + C.h * .15;
-  var bump = 1.7; var gloss = .1; var alb = vec3f(0.); var emi = vec3f(0.); var vao = 1.; var flu = 0.;
+  var bump = 1.7; var gloss = .1; var alb = vec3f(0.); var emi = vec3f(0.); var vao = 1.; var flu = 0.; var sand = 0.;
   let flt = ss(.72, .93, n0.y);
   if (mat <= 1) {
     // layered rock: grey / olive / brown beds, warm encrustation patches, algae on up-facing parts
@@ -335,6 +414,15 @@ fn tri(p: vec3f, n: vec3f, s: f32) -> TP {
       alb = mix(alb, vec3f(.20, .02, .12) * (.4 + .9 * B.h), mg * .8);
       flu = mg * .35;
       alb = mix(alb, alb * vec3f(.85, .8, 1.4) + vec3f(.015, .0, .05), gm.b * .8);
+      // island sand wherever the terrain is the island's own ground (rock that stands out of it stays rock): pale and dry
+      // up the beach, dark and glossy where the swell washes, rippled under the water
+      let ih = gm.g * 64. - 48.;
+      sand = select(0., ss(1.4, .4, i.wp.y - ih), gm.g > .004);
+      let y = i.wp.y; let wet = ss(1.6, .5, y);
+      var sc = mix(vec3f(.84, .71, .50), vec3f(.47, .38, .26), wet) * (.82 + .3 * B.h) * (.9 + .2 * C.c);
+      sc = mix(sc, vec3f(.105, .095, .075) * (.75 + .45 * B.h), ss(-.3, -4., y)); // the shallows get the caustics' full light
+      alb = mix(alb, sc, sand);
+      bump = mix(bump, .22, sand); gloss = mix(gloss, .55 * wet * ss(-1., .2, y), sand);
     }
   } else if (mat == 2) {
     // whale fluke: smooth pale stone with dark streaks running along its length
@@ -347,6 +435,16 @@ fn tri(p: vec3f, n: vec3f, s: f32) -> TP {
     alb *= .35 + .65 * ss(0., .12, min(pk, 1. - pk));
     alb = mix(alb, vec3f(.08, .22, .16), ss(.5, .7, A.c) * .6);
     gloss = .2; bump = .7;
+  } else if (mat == 6) {
+    // palm: a ringed grey-brown trunk; fronds green, yellowing towards the tips, letting light through
+    if (i.ao < 0.) {
+      let rg = fract(i.op.y * 2.1 + B.h * .4);
+      alb = mix(vec3f(.33, .27, .20), vec3f(.15, .12, .09), ss(.7, .95, rg)) * (.7 + .45 * B.h);
+      bump = .9; gloss = .05;
+    } else {
+      alb = mix(vec3f(.07, .22, .04), vec3f(.34, .36, .09), ss(.5, 1., i.ao)) * (.8 + .35 * fract(sd * 13.1)) * (.85 + .3 * C.h);
+      gloss = .4; bump = .15; flu = .7;
+    }
   } else if (mat == 4) {
     let hue = fract(sd * 7.31);
     alb = mix(vec3f(.60, .17, .08), vec3f(.64, .35, .10), fract(hue * 3.));
@@ -362,11 +460,12 @@ fn tri(p: vec3f, n: vec3f, s: f32) -> TP {
     alb = mix(alb, vec3f(1., .75, .6), ss(.8, 1., i.ao) * .35);
     emi = alb * .01; flu = .75; gloss = .25; bump = 1.5;
   }
-  let rip = select(0., flt * gm.a * cos((i.wp.x * .8 + i.wp.z * .35) * 5. + A.c * 9.) * .65, mat == 0);
+  sgro *= 1. - sand;
+  let rip = select(0., flt * max(gm.a, sand * .8) * cos((i.wp.x * .8 + i.wp.z * .35) * 5. + A.c * 9.) * .65, mat == 0);
   let N = normalize(qrot(i.q, normalize(on + (A.n * .85 + B.n * .65 + C.n * .45 * ss(60., 12., dist) + F.n * .5 * fk) * bump + vec3f(.8, sgro, .35) * vec3f(rip, 1., rip))));
   let L = g.sun.xyz; let V = normalize(g.cam.xyz - i.wp);
   let v1 = vol(i.wp + n0 * 1.5); let v2 = vol(i.wp + n0 * 4.5);
-  let ao = (sat((v1.r - .5) * 8.) * .55 + sat((v2.r - .5) * 2.7) * .45) * vao * ss(.12, .6, hgt);
+  let ao = (sat((v1.r - .5) * 8.) * .55 + sat((v2.r - .5) * 2.7) * .45) * vao * mix(ss(.12, .6, hgt), 1., max(sand, f32(mat == 6)));
   let z = zone(i.wp);
   let E = sunE(i.wp.y, z) * shadow9(i.wp + n0 * .35);
   let ndl = sat(dot(N, L));
@@ -877,11 +976,17 @@ fn vor(p: vec2f) -> vec3f {
 
 // ---------------------------------------------------------------- water surface seen from below
 const W_SURF = S_B + /*wgsl*/`
-struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f };
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) rp: vec2f };
+// a disc of ${SURF_R} rings x ${SURF_S} segments around the camera, rings packed close near it, displaced by the swell
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VO {
   var o: VO;
-  let p = vec2f(f32(i & 1u), f32(i >> 1u)) * 2. - 1.;
-  o.wp = vec3f(g.cam.x + p.x * 900., 0., g.cam.z + p.y * 900.);
+  let q = vi / 6u; let c = vi % 6u;
+  let ring = f32(q / ${SURF_S}u + select(0u, 1u, c == 2u || c == 3u || c == 5u));
+  let seg = f32(q % ${SURF_S}u + select(0u, 1u, c == 1u || c == 4u || c == 5u));
+  let u = ring / ${SURF_R}.; let r = 900. * u * u * sqrt(u); let a = seg * (TAU / ${SURF_S}.);
+  o.rp = g.cam.xz + r * vec2f(cos(a), sin(a));
+  let sw = swell(o.rp, g.cam.w, r);
+  o.wp = vec3f(o.rp.x, 0., o.rp.y) + sw.o;
   o.cp = g.vp * vec4f(o.wp, 1.);
   return o;
 }
@@ -889,7 +994,8 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f };
   let v = i.wp - g.cam.xyz; let d = length(v); let V = v / d;
   let fl = ss(260., 60., d);
   let s = (textureSample(tW, sR, i.wp.xz / 13.).ba + textureSample(tW, sR, i.wp.zx / 4.7 + .2).ba * .7 + textureSample(tW, sR, i.wp.xz / 37. + .6).ba * .8) * fl;
-  let n = normalize(vec3f(-s.x * .8, -1., -s.y * .8));
+  let sn = swell(i.rp, g.cam.w, length(i.rp - g.cam.xz)).n;
+  let n = -normalize(sn / sn.y + vec3f(s.x * .8, 0., s.y * .8));
   let ci = sat(dot(V, -n));
   let k = 1. - 1.769 * (1. - ci * ci);
   let win = ss(0., .22, k);
@@ -903,6 +1009,30 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f };
   let c = mix(refl, sky, win);
   return fin(fog(c, i.wp, z));
 }
+// seen from above (alpha blended over what lies under it, premultiplied): the sky reflected by the Fresnel share, the
+// sun's glitter, and foam where the swell runs up an island's beach
+@fragment fn fsA(i: VO) -> @location(0) vec4f {
+  let v = i.wp - g.cam.xyz; let d = length(v); let V = v / d;
+  let fl = ss(260., 60., d);
+  let s = (textureSample(tW, sR, i.wp.xz / 13.).ba + textureSample(tW, sR, i.wp.zx / 4.7 + .2).ba * .7 + textureSample(tW, sR, i.wp.xz / 37. + .6).ba * .8) * fl;
+  let sn = swell(i.rp, g.cam.w, length(i.rp - g.cam.xz)).n;
+  let n = normalize(sn / sn.y + vec3f(s.x, 0., s.y));
+  let ci = sat(dot(-V, n));
+  let fr = .02 + .98 * pow(1. - ci, 5.);
+  var R = reflect(V, n); R.y = abs(R.y);
+  let mu = sat(dot(R, g.sun.xyz));
+  var c = skyA(R) * fr + SUNC * (pow(mu, 900.) * 60. + pow(mu, 90.) * 1.2) * fl;
+  var a = fr;
+  // foam: the island ground (ground map g) within a metre or so under the surface, broken up by the caustic pattern
+  let gm = textureSample(tM, sM, i.wp.xz / ${KS * CHK}.);
+  let dep = i.wp.y - (gm.g * 64. - 48.);
+  let f0 = select(0., ss(.75, .05, dep), gm.g > .004) * ss(-.5, .05, dep);
+  let pat = textureSample(tW, sR, i.wp.xz / 4.3 + vec2f(g.cam.w * .02, 0.)).r + textureSample(tW, sR, i.wp.zx / 9.1).r * .6;
+  let fo = f0 * ss(.35, .75, pat * .8 + f0 * .45);
+  c = mix(c, (SUNC * .9 + vec3f(.35, .45, .6)) * .9, fo); a = mix(a, 1., fo * .9);
+  let T = exp(-d * HAZEK);
+  return vec4f(min(mix(HAZE * a, c, T), vec3f(40.)), a);
+}
 // behind everything: where no terrain is drawn (it stops at ~240 m) the water looks as it does at that distance
 @vertex fn vsB(@builtin(vertex_index) i: u32) -> VO {
   var o: VO;
@@ -912,7 +1042,12 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f };
   return o;
 }
 @fragment fn fsB(i: VO) -> @location(0) vec4f {
-  let p = g.cam.xyz + normalize(i.wp - g.cam.xyz) * 240.;
+  let rd = normalize(i.wp - g.cam.xyz); let p = g.cam.xyz + rd * 240.;
+  if (air()) {
+    if (rd.y >= 0.) { return fin(skyA(rd)); }
+    // below the horizon the surface is drawn over this: the deep water under it, hazy towards the horizon
+    return fin(mix(HAZE, deepA(rd, zone(p)), exp(-240. * HAZEK) * ss(0., -.04, rd.y)));
+  }
   return fin(fog(vec3f(0.), p, zone(p)));
 }
 `;
@@ -997,7 +1132,7 @@ const W_RAYS = S_G + W_FS + /*wgsl*/`
   let rl = length(rv); let rd = rv / rl;
   let zl = g.fwd.w / max(dp, 1e-6);
   var tm = min(zl * rl, 120.);
-  if (rd.y > 1e-4) { tm = min(tm, -g.cam.y / rd.y); }
+  if (rd.y > 1e-4) { tm = min(tm, (swell(g.cam.xz, g.cam.w, 0.).o.y - g.cam.y) / rd.y); } // the swell overhead, taken as level
   let ro = g.cam.xyz; let sx = g.sun.xyz; let k = kd(g.sun.w); let sgz = sg(g.sun.w);
   let dt = tm / ${RAYN}.;
   let j = ign(fc.xy);
@@ -1009,7 +1144,7 @@ const W_RAYS = S_G + W_FS + /*wgsl*/`
     let vis = textureSampleCompareLevel(tSh, sS, vec2f(s.x * .5 + .5, .5 - s.y * .5), s.z - .0006);
     let q = p.xz - sx.xz * (p.y / sx.y);
     let pat = ss(.3, .7, textureSampleLevel(tW, sR, q / 27., 2.5).r) * ss(.15, .6, textureSampleLevel(tW, sR, q.yx / 11. + .3, 2.).r);
-    let o = textureSampleLevel(tV, sC, vec3f(p.x, p.y + 56., p.z) / vec3f(${KS * CHK}., 60., ${KS * CHK}.), 0.).r;
+    let o = textureSampleLevel(tV, sC, vec3f(p.x, p.y + ${-OY}., p.z) / vec3f(${KS * CHK}., ${NY * VS}., ${KS * CHK}.), 0.).r;
     let mist = sat(1. - (o - .5) * 3.4);
     acc += exp(-sgz * t + k * (p.y / sx.y)) * (vis * (.012 + pat * 6.) * (1. + 1.2 * mist * mist));
   }
@@ -1028,7 +1163,7 @@ const W_RBLUR = W_FS + /*wgsl*/`
   var acc = vec3f(0.); var ws = 0.;
   for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) {
     let r = textureLoad(tR, clamp(p + vec2i(x, y) , vec2i(0), mx), 0);
-    let w = 1. / (.03 + abs(r.a - c.a) / c.a);
+    let w = 1. / (.03 + abs(r.a - c.a) / max(c.a, 1e-4)); // a = 0: no shafts drawn (above the water)
     acc += r.rgb * w; ws += w;
   } }
   return vec4f(acc / ws, c.a);

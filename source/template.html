@@ -113,6 +113,14 @@ svg { width: 1.5em; height: 1.5em; fill: currentColor; }
 }
 .g #o { display: flex; }
 .p #o { display: none; }
+/* minimap (bottom right) with the coordinates under it; N hides it */
+#nm { position: absolute; right: 1em; bottom: 1em; display: none; justify-items: center; gap: .35em; pointer-events: none; }
+.g #nm:not([hidden]) { display: grid; }
+#nm canvas {
+  position: static; width: clamp(130px, 12em, 300px); height: auto; aspect-ratio: 1; cursor: default;
+  filter: drop-shadow(0 .3em .8em #0009); transform: none; transition: none; opacity: 1;
+}
+#nc { margin: 0; font: .75em/1.5 ui-monospace, Consolas, monospace; text-align: center; white-space: pre; text-shadow: 0 1px 4px #000; }
 #i {
   position: absolute; top: 1em; left: 1.2em; margin: 0; font: .8em/1.6 ui-monospace, Consolas, monospace;
   white-space: pre-wrap; text-shadow: 0 1px 4px #000; pointer-events: none;
@@ -121,6 +129,7 @@ svg { width: 1.5em; height: 1.5em; fill: currentColor; }
 </head>
 <body class=l>
 <canvas id=c></canvas>
+<div id=nm><canvas id=n></canvas><p id=nc></p></div>
 <div id=m>
   <h1>Abyssal Garden</h1>
   <div id=a>
@@ -130,15 +139,16 @@ svg { width: 1.5em; height: 1.5em; fill: currentColor; }
       <p id=q><span>Detail</span><button>Low</button><button>Medium</button><button>High</button></p>
       <div id=k>
         <p>
-          <i><b>W</b><b>A</b><b>S</b><b>D</b></i>Swim
-          <i><b>Q</b><b>E</b></i>Down / up
+          <i><b>W</b><b>A</b><b>S</b><b>D</b></i>Swim / walk
+          <i><b>Q</b><b>E</b></i>Down / up, jump
           <i><b>Shift</b></i>Faster
-          <i><b>1</b>–<b>6</b></i>Viewpoints
+          <i><b>1</b>–<b>7</b></i>Viewpoints
         </p>
         <p>
           <i><b>Esc</b></i>Menu
           <i><b>M</b></i>Mute
           <i><b>H</b></i>Stats
+          <i><b>N</b></i>Map
         </p>
       </div>
       <p id=h>Hold to swim forward · slide to steer · second finger to go faster</p>

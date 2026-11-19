@@ -113,8 +113,10 @@ const pCrawl = [scenePipe(mAnim, 'vsCrab', 'fsCrab', [vbSolid, ibAnim]), scenePi
 const pDolphin = scenePipe(mAnim, 'vsDolphin', 'fsDolphin', [vbSolid, ibAnim]), pTuna = scenePipe(mAnim, 'vsTuna', 'fsTuna', [vbSolid, ibAnim]);
 const pReef = [scenePipe(mAnim, 'vsFish', 'fsIdol', [vbSolid, ibAnim]), scenePipe(mAnim, 'vsFish', 'fsButterfly', [vbSolid, ibAnim]), scenePipe(mAnim, 'vsFish', 'fsBoxBrown', [vbSolid, ibAnim]), scenePipe(mAnim, 'vsFish', 'fsBoxBlue', [vbSolid, ibAnim])];
 const pTurtle = [0, 1, 2].map((sp) => scenePipe(mAnim, 'vsTurtle', 'fsTurtle', [vbSolid, ibAnim], { fc: { SP: sp } }));
-const pSurf = scenePipe(mSurf, 'vs', 'fs', [], { strip: true }), pBack = scenePipe(mSurf, 'vsB', 'fsB', [], { strip: true });
-const pBub = scenePipe(mSpr, 'vsBub', 'fsBub', [ibBub], { strip: true, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } });
+const pSurf = scenePipe(mSurf, 'vs', 'fs', []), pBack = scenePipe(mSurf, 'vsB', 'fsB', [], { strip: true });
+const PRE = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+const pBub = scenePipe(mSpr, 'vsBub', 'fsBub', [ibBub], { strip: true, blend: PRE });
+const pSurfA = scenePipe(mSurf, 'vs', 'fsA', [], { blend: PRE }); // the surface seen from above
 const ADD = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } };
 const pSnow = scenePipe(mSpr, 'vsSnow', 'fsSnow', [ibSnow], { strip: true, blend: ADD });
 const pGl = scenePipe(mLeaf, 'vsGl', 'fsGl', [ibBub], { strip: true, blend: ADD, constants: { ROWS: 7 } });
@@ -169,9 +171,9 @@ const bdD = device.createBuffer({ size: GN * NY * GN * 4, usage: BU.STORAGE | BU
 async function density(nx, ny, nz, ox, oy, oz, pr, slab) {
   const size = nx * ny * nz * 4, bp = buf(pr.data, BU.STORAGE);
   for (let z = 0; z < nz; z += slab) {
-    const u = new ArrayBuffer(48), uu = new Uint32Array(u), uf = new Float32Array(u);
+    const u = new ArrayBuffer(64), uu = new Uint32Array(u), uf = new Float32Array(u);
     uu[0] = nx; uu[1] = ny; uu[2] = nz; uu[3] = z; uf[4] = ox; uf[5] = oy; uf[6] = oz; uf[7] = VS;
-    uu[8] = pr.n[0]; uu[9] = pr.n[1]; uu[10] = pr.n[2]; uu[11] = pr.n[3];
+    uu[8] = pr.n[0]; uu[9] = pr.n[1]; uu[10] = pr.n[2]; uu[11] = pr.n[3]; uu[12] = pr.n[4];
     const bu = buf(new Uint8Array(u), BU.UNIFORM);
     const bg = device.createBindGroup({ layout: pDens.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: bu } }, { binding: 1, resource: { buffer: bdD } }, { binding: 2, resource: { buffer: bp } }] });
     const e = device.createCommandEncoder(), c = e.beginComputePass();
@@ -207,7 +209,8 @@ function* clean(D) {
   for (const i of L) if (!R[i]) D[i] = -D[i];
 }
 
-// preset viewpoints (position, look-at), keys 1-6; the world generator dresses the scene around them
+// preset viewpoints (position, look-at), keys 1-7; the world generator dresses the scene around them. The heights are
+// above the ground there. 7 stands on the beach of the island east of the start, at eye height, looking out to sea.
 const POSES = [
   [10, 1.3, 7, -9, -31, -10],
   [50, 1.3, 34, 58, -23, 8],
@@ -215,7 +218,10 @@ const POSES = [
   [-55, 1.5, -18, -60, -30, 8],
   [10, 1.2, -62, 6, -22, -90],
   [3, 1.6, 62, 1, -28, 100],
+  [236, 1.7, -16, 320, -2, 10],
 ];
+// jump to viewpoint i: standing on the beach (7) walks, the others swim
+const goPose = (i) => { lookAt(...POSES[i]); F[VX] = F[VY] = F[VZ] = 0; F[WALK] = +(i === 6); F[GND] = POSES[i][1] - 1.7; };
 // 60 s camera path (position + look-at, Catmull-Rom): the world generator keeps it clear, dev.js flies along it
 const FLY = new Float32Array([
   10, -42.2, 7, -9, -31, -10,
@@ -248,7 +254,7 @@ const FLYN = FLY.length / 6, FLYT = 60, LUTN = 1024, flyLUT = new Float32Array(L
 const flyPts = [];
 // per-frame float state lives in one preallocated array, so the frame loop allocates no heap numbers
 const F = new Float64Array(32), P6 = new Float64Array(6);
-const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24;
+const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24, WALK = 25, GND = 26;
 // aim the camera from P6 = position + look-at point
 function aim() {
   const dx = P6[3] - P6[0], dy = P6[4] - P6[1], dz = P6[5] - P6[2];
@@ -289,13 +295,14 @@ const meshes = [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22
   meshLathe([[0, 0, 0.5], [0.5, 0, 0.7], [0.72, 0.18, 1], [0.74, 0.38, 1], [0.62, 0.5, 0.9], [0.48, 0.42, 0.45], [0.4, 0.2, 0.15], [0, 0.14, 0.06]], 18, 0.25, 10),
   meshCoral(0), meshCoral(1), meshTubes()].map((m) => m.build());
 meshes.push(meshFluke(), meshShip().build(), meshManta().build(), meshFish().build(),
-  meshChunk(3).build(), meshChunk(11).build(), meshChunk(29).build(), meshChunk(5, 3).build(), meshChunk(17, 3).build(), meshChunk(41, 3).build(), meshChunk(9, 1).build(), meshCoral(0, 1).build(), meshCoral(1, 1).build(), meshChunk(5, 2, 1).build(), meshChunk(17, 2, 1).build(), meshChunk(41, 2, 1).build(), meshBarracuda(0).build(), meshBarracuda(1).build(), meshDolphin().build(), meshTuna().build(), meshShark().build(), meshTurtle(0).build(), meshTurtle(1).build(), meshTurtle(2).build(), meshReef(0).build(), meshReef(1).build(), meshBoxfish().build(), meshCrawler(0).build(), meshCrawler(1).build());
+  meshChunk(3).build(), meshChunk(11).build(), meshChunk(29).build(), meshChunk(5, 3).build(), meshChunk(17, 3).build(), meshChunk(41, 3).build(), meshChunk(9, 1).build(), meshCoral(0, 1).build(), meshCoral(1, 1).build(), meshChunk(5, 2, 1).build(), meshChunk(17, 2, 1).build(), meshChunk(41, 2, 1).build(), meshBarracuda(0).build(), meshBarracuda(1).build(), meshDolphin().build(), meshTuna().build(), meshShark().build(), meshTurtle(0).build(), meshTurtle(1).build(), meshTurtle(2).build(), meshReef(0).build(), meshReef(1).build(), meshBoxfish().build(), meshCrawler(0).build(), meshCrawler(1).build(), meshPalm().build());
 let nV = 0, nI = 0;
 for (const m of meshes) { m.v0 = nV; m.i0 = nI; nV += m.nv; nI += m.ib.length; }
 const allV = new Uint8Array(nV * 16), allI = new Uint32Array(nI);
 for (const m of meshes) { allV.set(new Uint8Array(m.vb), m.v0 * 16); allI.set(m.ib, m.i0); }
 const vbMesh = buf(allV, BU.VERTEX), ibMesh = buf(allI, BU.INDEX);
-const MANTA = meshes[12], FISH = meshes[13], BARRA = meshes.slice(-13, -11), DOLPHIN = meshes[meshes.length - 11], TUNA = meshes[meshes.length - 10], SHARK = meshes[meshes.length - 9], TURTLE = meshes.slice(-8, -5), REEF = [...meshes.slice(-5, -3), meshes[meshes.length - 3], meshes[meshes.length - 3]], CRAWL = meshes.slice(-2);
+const PALM = meshes[meshes.length - 1], M0 = meshes.slice(0, -1); // M0: the meshes before the palm, counted from their end
+const MANTA = M0[12], FISH = M0[13], BARRA = M0.slice(-13, -11), DOLPHIN = M0[M0.length - 11], TUNA = M0[M0.length - 10], SHARK = M0[M0.length - 9], TURTLE = M0.slice(-8, -5), REEF = [...M0.slice(-5, -3), M0[M0.length - 3], M0[M0.length - 3]], CRAWL = M0.slice(-2);
 // drifting particles: a box of them that moves with the camera (see vsSnow)
 rseed(15);
 const ibSnowB = buf(Float32Array.from({ length: 9000 * 4 }, rnd), BU.VERTEX), nSnow = 9000;
@@ -339,7 +346,7 @@ function uploadChunk(ci, cj, col, T, Wd) {
   c.rk = Wd.chunks.map((o) => inst(o, o.data)); c.pr = Wd.props.map((o) => inst(o, o.data));
   c.big = inst(Wd.big, new Uint8Array(Wd.big.buf)); c.bigF = inst(Wd.bigF, new Uint8Array(Wd.bigF.buf)); c.small = inst(Wd.small, new Uint8Array(Wd.small.buf));
   const list = (data, w) => ({ n: data.length / w, buf: data.length ? mk(data, BU.VERTEX) : null });
-  c.fish = list(Wd.fish, 8); c.mantas = list(Wd.mantas, 8); c.sharks = list(Wd.sharks, 8); c.dolphins = list(Wd.dolphins, 8); c.tunas = list(Wd.tunas, 8); c.crawl = Wd.crawl.map((b) => list(b, 8)); c.barras = Wd.barras.map((b) => list(b, 8)); c.turtles = Wd.turtles.map((t) => list(t, 8)); c.reef = Wd.reef.map((t) => list(t, 8)); c.bubbles = list(Wd.bubbles, 8); c.glints = list(Wd.glints, 8);
+  c.fish = list(Wd.fish, 8); c.mantas = list(Wd.mantas, 8); c.sharks = list(Wd.sharks, 8); c.dolphins = list(Wd.dolphins, 8); c.tunas = list(Wd.tunas, 8); c.crawl = Wd.crawl.map((b) => list(b, 8)); c.barras = Wd.barras.map((b) => list(b, 8)); c.turtles = Wd.turtles.map((t) => list(t, 8)); c.reef = Wd.reef.map((t) => list(t, 8)); c.bubbles = list(Wd.bubbles, 8); c.palms = list(Wd.palms, 12); c.glints = list(Wd.glints, 8);
   Q.writeTexture({ texture: tVol, origin: [slot(ci) * CVX / 2, 0, slot(cj) * CVX / 2] }, Wd.volD, { bytesPerRow: CVX, rowsPerImage: NY / 2 }, [CVX / 2, NY / 2, CVX / 2]);
   Q.writeTexture({ texture: tMap, origin: [slot(ci) * 128, slot(cj) * 128] }, Wd.gm, { bytesPerRow: 512 }, [128, 128]);
   return c;
@@ -377,6 +384,7 @@ function bakeChunk(e, k, c) {
   if (c.nv) { r.setPipeline(pTerrSh); r.setVertexBuffer(0, c.vbT); r.setVertexBuffer(1, c.ibS); r.setIndexBuffer(c.ibT, 'uint32'); r.drawIndexed(c.nIdx, 1, 0, 0, c.nSolid); }
   r.setPipeline(pSolidSh); r.setVertexBuffer(0, vbMesh); r.setVertexBuffer(1, c.ibS); r.setIndexBuffer(ibMesh, 'uint32');
   for (let i = 0; i < 12; i++) { const g = c.solids[i]; if (g[1]) r.drawIndexed(meshes[i].ib.length, g[1], meshes[i].i0, meshes[i].v0, g[0]); }
+  if (c.palms.n) { r.setVertexBuffer(1, c.palms.buf); r.drawIndexed(PALM.ib.length, c.palms.n, PALM.i0, PALM.v0, 0); }
   // small rocks, sponges and corals (~35M triangles) only on High: too much for a phone's driver
   if (!LV) for (let i = 0; i < NCHUNK; i++) if (c.rk[i].n) { r.setVertexBuffer(1, c.rk[i].buf); r.drawIndexed(meshes[14 + i].ib.length, c.rk[i].n, meshes[14 + i].i0, meshes[14 + i].v0, 0); }
   if (!LV) for (let i = 0; i < 6; i++) if (c.pr[i].n) { r.setVertexBuffer(1, c.pr[i].buf); r.drawIndexed(meshes[4 + i].ib.length, c.pr[i].n, meshes[4 + i].i0, meshes[4 + i].v0, 0); }
@@ -462,7 +470,7 @@ if (hasTS) {
 // ---------------------------------------------------------------- frame
 let hud = false;
 let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
-const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, RAYS = 0.54;
+const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, EXPO_A = 0.27, RAYS = 0.54;
 const submitList = [null];
 const rowOrd = new Uint8Array(CELLS);
 // Draws the cells of one chunk's cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for
@@ -513,7 +521,8 @@ function render() {
   m[44] = fx; m[45] = fy; m[46] = fz; m[47] = NEAR;
   m[51] = zoneP(cx, cz);
   let ek = (-cy - 8) / 26; ek = ek < 0 ? 0 : ek > 1 ? 1 : ek;
-  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det;
+  const air = cy > swellY(cx, cz, F[TIME]);
+  m[56] = air ? EXPO_A : EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det; m[59] = +air;
   const act = shAct;
   UB.set(UBS[act].subarray(16, 32), 16);
   Q.writeBuffer(ubo, 0, UB);
@@ -543,6 +552,7 @@ function render() {
   for (const c of vis) if (c.nv) { r.setVertexBuffer(0, c.vbT); r.setVertexBuffer(1, c.ibS); r.setIndexBuffer(c.ibT, 'uint32'); drawCells(r, c, c.T.start, c.T.lo, c.T.hi, 1.5, 1, 0, 0, 200); }
   r.setPipeline(pSolid); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
   for (const c of vis) { r.setVertexBuffer(1, c.ibS); for (let i = 0; i < 12; i++) { const g = c.solids[i]; if (g[1]) r.drawIndexed(meshes[i].ib.length, g[1], meshes[i].i0, meshes[i].v0, g[0]); } }
+  for (const c of vis) if (c.palms.n) { r.setVertexBuffer(1, c.palms.buf); r.drawIndexed(PALM.ib.length, c.palms.n, PALM.i0, PALM.v0, 0); }
   for (let i = 0; i < NCHUNK; i++) {
     const big = i > 2 && i < 6;
     for (const c of vis) {
@@ -575,14 +585,20 @@ function render() {
   r.setPipeline(pLeaf5); for (const c of vis) if (c.big.n) { r.setVertexBuffer(0, c.big.buf); drawCells(r, c, c.big.start, c.big.lo, c.big.hi, 5, false, 10, 24, 58); }
   r.setPipeline(pLeafF); for (const c of vis) if (c.bigF.n) { r.setVertexBuffer(0, c.bigF.buf); drawCells(r, c, c.bigF.start, c.bigF.lo, c.bigF.hi, 5, false, 6, 58, 150); }
   r.setPipeline(pLeafS); for (const c of vis) if (c.small.n) { r.setVertexBuffer(0, c.small.buf); drawCells(r, c, c.small.start, c.small.lo, c.small.hi, 1.5, false, 6, 0, 70); }
-  r.setPipeline(pSurf); r.draw(4);
-  r.setPipeline(pBack); r.draw(4);
-  r.setPipeline(pBub); for (const c of vis) if (c.bubbles.n) { r.setVertexBuffer(0, c.bubbles.buf); r.draw(4, c.bubbles.n); }
-  r.setPipeline(pGl); for (const c of vis) if (c.glints.n) { r.setVertexBuffer(0, c.glints.buf); r.draw(4, c.glints.n); }
-  r.setPipeline(pSnow); r.setVertexBuffer(0, ibSnowB); r.draw(4, nSnow);
+  if (air) {
+    // from above, the sky goes behind everything first and the see-through surface over what lies under the water
+    r.setPipeline(pBack); r.draw(4);
+    r.setPipeline(pSurfA); r.draw(SURF_R * SURF_S * 6);
+  } else {
+    r.setPipeline(pSurf); r.draw(SURF_R * SURF_S * 6);
+    r.setPipeline(pBack); r.draw(4);
+    r.setPipeline(pBub); for (const c of vis) if (c.bubbles.n) { r.setVertexBuffer(0, c.bubbles.buf); r.draw(4, c.bubbles.n); }
+    r.setPipeline(pGl); for (const c of vis) if (c.glints.n) { r.setVertexBuffer(0, c.glints.buf); r.draw(4, c.glints.n); }
+    r.setPipeline(pSnow); r.setVertexBuffer(0, ibSnowB); r.draw(4, nSnow);
+  }
   r.end();
-  // light shafts
-  r = e.beginRenderPass(passRays); r.setPipeline(pRays); r.setBindGroup(0, bgRays[act]); r.draw(3); r.end();
+  // light shafts (under the water only: in the air the pass just clears them)
+  r = e.beginRenderPass(passRays); if (!air) { r.setPipeline(pRays); r.setBindGroup(0, bgRays[act]); r.draw(3); } r.end();
   r = e.beginRenderPass(passBlur); r.setPipeline(pRB); r.setBindGroup(0, bgBlur); r.draw(3); r.end();
   // bloom
   for (let i = 0; i < bloomPass.length; i++) {
@@ -603,21 +619,34 @@ const CE = new Float64Array([0, 0, 0, .375, 0, 0, -.375, 0, 0, 0, .375, 0, 0, -.
 // the distance to the rock at voxel (x, y, z) of the world grid, from the bricks of the chunk it is in (water where there is none)
 let cvC = null, cvK = -1, cvV = -1;
 const cv = (x, y, z) => {
+  if (y < 0) return 127; if (y >= NY) return -127; // below the grid is rock, above it air
   const k = ckey(x >> 7, z >> 7);
   if (k !== cvK || cvV !== chunkVer) { cvK = k; cvV = chunkVer; cvC = chunks.get(k); }
   if (!cvC) return -127;
   const lx = x & 127, lz = z & 127, b = cvC.col.CI[(lx >> 2) + BX * ((y >> 2) + BY * (lz >> 2))];
   return b > 1 ? cvC.col.CG[b * 64 - 128 + (lx & 3) + 4 * (y & 3) + 16 * (lz & 3)] : b * 254 - 127;
 };
-function sd(j) {
-  const x = (F[CX] + CE[j * 3]) / VS, y = (F[CY] + CE[j * 3 + 1] - OY) / VS, z = (F[CZ] + CE[j * 3 + 2]) / VS;
+// the distance to the rock (metres, clamped to +-1, < 0 in water or air) at (px, py, pz)
+function rockD(px, py, pz) {
+  const x = px / VS, y = (py - OY) / VS, z = pz / VS;
   const ix = floor(x), iy = floor(y), iz = floor(z), u = x - ix, v = y - iy, a = cv(ix, iy, iz), b = cv(ix, iy + 1, iz), c = cv(ix, iy, iz + 1), d = cv(ix, iy + 1, iz + 1);
   const p = a + (cv(ix + 1, iy, iz) - a) * u, q = b + (cv(ix + 1, iy + 1, iz) - b) * u, r = c + (cv(ix + 1, iy, iz + 1) - c) * u, s = d + (cv(ix + 1, iy + 1, iz + 1) - d) * u;
-  const e = p + (q - p) * v; CS[j] = (e + (r + (s - r) * v - e) * (z - iz)) / 127;
+  const e = p + (q - p) * v; return (e + (r + (s - r) * v - e) * (z - iz)) / 127;
+}
+const sd = (j) => { CS[j] = rockD(F[CX] + CE[j * 3], F[CY] + CE[j * 3 + 1], F[CZ] + CE[j * 3 + 2]); };
+// the height of the first ground below (x, y0, z), at most `range` m down: -1e9 if there is none, 1e9 if (x, y0, z) is
+// itself in the rock
+function ground(x, y0, z, range) {
+  if (rockD(x, y0, z) > 0) return 1e9;
+  for (let hi = y0, y = y0 - 0.3; y > y0 - range; hi = y, y -= 0.3) if (rockD(x, y, z) > 0) {
+    let lo = y; for (let i = 0; i < 6; i++) { const m = (lo + hi) * 0.5; if (rockD(x, m, z) > 0) lo = m; else hi = m; }
+    return (lo + hi) * 0.5;
+  }
+  return -1e9;
 }
 // Moves the camera by F[MX..MZ] in steps shorter than its radius CR (so it can't pass through thin rock), pushing it
 // back out after each step and dropping velocity into the rock, so it slides along.
-const CR = 0.5;
+const CR = 0.5, EYE = 1.7;
 function collide() {
   const n = floor(sqrt(F[MX] * F[MX] + F[MY] * F[MY] + F[MZ] * F[MZ]) / 0.4) + 1;
   for (let i = 0; i < n; i++) {
@@ -672,20 +701,104 @@ function frame(now) {
     const ax = lkx * kq, ay = lky * kq; lkx -= ax; lky -= ay; l2x += ax; l2y += ay;
     const dyw = l2x * kq, dpt = l2y * kq; l2x -= dyw; l2y -= dpt;
     const yaw = F[YAW] + dyw; let pitch = F[PIT] - dpt; pitch = pitch < -1.55 ? -1.55 : pitch > 1.55 ? 1.55 : pitch;
-    const sp = ks || tN > 1 ? 26 : 7, k = 1 - exp(-dt * 4.5), mf = tId >= 0 ? 0.7 : kf - kb, mr = kr - kl, mu = ku - kd, cp = cos(pitch), sy = sin(yaw), cw = cos(yaw);
-    const vx = F[VX] + ((sy * cp * mf + cw * mr) * sp - F[VX]) * k, vy = F[VY] + ((sin(pitch) * mf + mu) * sp - F[VY]) * k, vz = F[VZ] + ((-cw * cp * mf + sy * mr) * sp - F[VZ]) * k;
-    let x = F[CX] + vx * dt, y = F[CY] + vy * dt, z = F[CZ] + vz * dt;
-    // the swimmer waits at the edge of the built chunks rather than swim into ones that are not there yet
-    if (chunkAt(F[CX], F[CZ]) && !chunkAt(x, z)) { x = F[CX]; z = F[CZ]; }
-    y = y < -52 ? -52 : y > -1.2 ? -1.2 : y;
+    const fast = ks || tN > 1, mf = tId >= 0 ? 0.7 : kf - kb, mr = kr - kl, cp = cos(pitch), sy = sin(yaw), cw = cos(yaw);
+    let vx, vy, vz, x, y, z;
+    if (F[WALK] && !chunkAt(F[CX], F[CZ])) {
+      // just dropped on a beach whose ground is still being built: stand still until it is there
+      vx = vy = vz = 0; x = F[CX]; y = F[CY]; z = F[CZ];
+    } else if (F[WALK]) {
+      // ashore: walk (Shift runs) over the ground at eye height, E jumps
+      const sp = fast ? 9 : 4.2, k = 1 - exp(-dt * 8);
+      vx = F[VX] + ((sy * mf + cw * mr) * sp - F[VX]) * k; vz = F[VZ] + ((-cw * mf + sy * mr) * sp - F[VZ]) * k; vy = F[VY];
+      x = F[CX] + vx * dt; y = F[CY]; z = F[CZ] + vz * dt;
+      if (chunkAt(F[CX], F[CZ]) && !chunkAt(x, z)) { x = F[CX]; z = F[CZ]; }
+      // the ground under the eyes; ground that rises steeper than about 50 degrees (or above the eyes) is a wall
+      let g = ground(x, y + 0.2, z, 14);
+      if (g > F[GND] + 0.05 + 1.2 * hypot(x - F[CX], z - F[CZ])) { x = F[CX]; z = F[CZ]; vx = vz = 0; g = ground(x, y + 0.2, z, 14); }
+      F[GND] = g;
+      if (g < -1e8 || g > 1e8 || swellY(x, z, F[TIME]) - g > 1.9) F[WALK] = 0; // into deep water: swim again
+      else {
+        const tgt = g + EYE;
+        if (vy > 0 || y > tgt + 0.4) { vy -= 16 * dt; y += vy * dt; if (y < tgt) { y = tgt; vy = 0; } } // in the air: fall
+        else { y += (tgt - y) * (1 - exp(-dt * (tgt - y > 0.4 ? 5 : 14))); vy = ku ? 5 : 0; } // on the ground: follow it
+      }
+    } else {
+      const sp = fast ? 26 : 7, k = 1 - exp(-dt * 4.5), mu = ku - kd;
+      vx = F[VX] + ((sy * cp * mf + cw * mr) * sp - F[VX]) * k; vy = F[VY] + ((sin(pitch) * mf + mu) * sp - F[VY]) * k; vz = F[VZ] + ((-cw * cp * mf + sy * mr) * sp - F[VZ]) * k;
+      x = F[CX] + vx * dt; y = F[CY] + vy * dt; z = F[CZ] + vz * dt;
+      // the swimmer waits at the edge of the built chunks rather than swim into ones that are not there yet
+      if (chunkAt(F[CX], F[CZ]) && !chunkAt(x, z)) { x = F[CX]; z = F[CZ]; }
+      // the ceiling rides the swell: just under the surface the swimmer is lifted and lowered with it (and one who has
+      // just walked into deep water sinks down to it)
+      const w = swellY(x, z, F[TIME]), top = w - 1.2;
+      if (y > top) { y = max(top, min(y, F[CY]) - 3 * dt); if (vy > 0) vy = 0; }
+      if (y < -52) y = -52;
+      // wading ashore: where the water is shallow enough to stand in, stand up and walk
+      const g = ground(x, y + 0.6, z, 3);
+      if (g > -1e8 && g < 1e8 && w - g < 1.6) { F[WALK] = 1; F[GND] = g; }
+    }
     F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
     collide();
   }
   render();
+  minimap(dtr);
   if (hud) {
     hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
     F[HUDT] += dtr / 1000;
     if (F[HUDT] > 0.5) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  GPU ${F[GPU].toFixed(2)} ms  ·  ${W}x${H} (${W * 100 / DW | 0}%)`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; }
+  }
+}
+
+// ---------------------------------------------------------------- minimap
+// North up: -z is north, +x is east. Islands (their real coastlines, and the shallows around them), the hand-made area
+// around the start, rings every 200 m, and an arrow for the camera. Drawn every frame without allocating; the
+// coordinates line under it is rewritten 4 times a second.
+const mmC = $('n'), mg = mmC.getContext('2d'), mmBox = $('nm'), mmTxt = $('nc'), MMR = 400; // metres from centre to rim
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+let mmPx = 0, mmIsl = [], mmCx = 1e9, mmCz = 1e9, mmT = 0;
+function coast(I, grow, px, pz, s, c) {
+  mg.beginPath();
+  for (let k = 0; k <= 40; k++) {
+    const th = k / 40 * TAU, Rm = I[2] * (1 + 0.14 * sin(3 * th + I[4]) + 0.08 * sin(5 * th + I[5]) + 0.05 * sin(8 * th + I[6])) + grow;
+    const x = c + (I[0] + cos(th) * Rm - px) * s, y = c + (I[1] + sin(th) * Rm - pz) * s;
+    if (k) mg.lineTo(x, y); else mg.moveTo(x, y);
+  }
+}
+function minimap(dtr) {
+  if (mmBox.hidden || menu) return;
+  const S = mmC.clientWidth * devicePixelRatio | 0; if (!S) return;
+  if (S !== mmPx) { mmC.width = mmC.height = mmPx = S; }
+  const px = F[CX], pz = F[CZ], c = S / 2, dp = S / 160, s = (c - 14 * dp) / MMR;
+  if (abs(px - mmCx) > 150 || abs(pz - mmCz) > 150) { mmCx = px; mmCz = pz; mmIsl = islesNear(px - MMR - 300, pz - MMR - 300, px + MMR + 300, pz + MMR + 300); }
+  mg.setTransform(1, 0, 0, 1, 0, 0); mg.clearRect(0, 0, S, S);
+  mg.save(); mg.beginPath(); mg.arc(c, c, c - dp, 0, TAU); mg.fillStyle = '#062c3ae6'; mg.fill(); mg.clip();
+  mg.lineWidth = dp; mg.strokeStyle = '#7ff3ff22';
+  for (let k = 200; k < MMR + 200; k += 200) { mg.beginPath(); mg.arc(c, c, k * s, 0, TAU); mg.stroke(); }
+  for (let i = 0; i < mmIsl.length; i++) {
+    const I = mmIsl[i];
+    coast(I, 18, px, pz, s, c); mg.fillStyle = '#2fc6c866'; mg.fill(); // shallows
+    coast(I, 0, px, pz, s, c); mg.fillStyle = '#e9d7a6'; mg.fill(); // dry sand
+  }
+  // the hand-made scenes around the start
+  const sx = c - px * s, sz = c - pz * s;
+  mg.beginPath(); mg.arc(sx, sz, 110 * s, 0, TAU); mg.strokeStyle = '#ff8fd666'; mg.setLineDash([3 * dp, 3 * dp]); mg.stroke(); mg.setLineDash([]);
+  mg.fillStyle = '#ff8fd6'; mg.font = `800 ${9 * dp}px system-ui, sans-serif`; mg.textAlign = 'center'; mg.textBaseline = 'middle'; mg.fillText('START', sx, sz);
+  mg.restore();
+  // rim and compass letters
+  mg.beginPath(); mg.arc(c, c, c - dp, 0, TAU); mg.lineWidth = 1.5 * dp; mg.strokeStyle = '#7ff3ffb3'; mg.stroke();
+  mg.font = `900 ${12 * dp}px system-ui, sans-serif`; mg.textAlign = 'center'; mg.textBaseline = 'middle';
+  const e = c - 8 * dp;
+  mg.fillStyle = '#ff6b6b'; mg.fillText('N', c, c - e);
+  mg.fillStyle = '#e8fbff'; mg.fillText('S', c, c + e); mg.fillText('E', c + e, c); mg.fillText('W', c - e, c);
+  // the camera: an arrow along its heading
+  mg.translate(c, c); mg.rotate(F[YAW]);
+  mg.beginPath(); mg.moveTo(0, -9 * dp); mg.lineTo(6 * dp, 7 * dp); mg.lineTo(0, 3.5 * dp); mg.lineTo(-6 * dp, 7 * dp); mg.closePath();
+  mg.fillStyle = '#fff'; mg.fill(); mg.lineWidth = 1.5 * dp; mg.strokeStyle = '#03222d'; mg.stroke();
+  if ((mmT += dtr) > 250) {
+    mmT = 0;
+    let hd = (F[YAW] * 180 / PI) % 360; if (hd < 0) hd += 360;
+    const y = F[CY], n = (v) => (v < 0 ? '−' : '') + abs(round(v));
+    mmTxt.textContent = `x ${n(px)}  z ${n(pz)}\n${y < 0 ? `${round(-y)} m deep` : `${y.toFixed(1)} m up`} · ${COMPASS[round(hd / 45) % 8]} ${String(round(hd) % 360).padStart(3, '0')}°`;
   }
 }
 
@@ -697,8 +810,9 @@ const key = (e, v) => {
     default: if (v && !e.repeat) {
       if (e.code === 'KeyH') { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; }
       else if (e.code === 'KeyM') mute();
+      else if (e.code === 'KeyN') mmBox.hidden = !mmBox.hidden;
       else if (e.code === 'Escape') ui(true);
-      else if (e.code >= 'Digit1' && e.code <= 'Digit6') lookAt(...POSES[e.code.charCodeAt(5) - 49]);
+      else if (e.code >= 'Digit1' && e.code <= 'Digit7') goPose(e.code.charCodeAt(5) - 49);
     }
   }
 };

@@ -49,7 +49,7 @@ function mkSound(ac) {
     lt = now; lx = F[CX]; ly = F[CY]; lz = F[CZ];
     rush.gain.setTargetAtTime(0.5 * pow(min(v / 26, 1), 1.2), t, 0.3); rushF.frequency.setTargetAtTime(220 + v * 14, t, 0.3);
     const s = clamp(1 + ly / 30, 0, 1); wash.gain.setTargetAtTime(0.25 + 0.55 * s * s, t, 0.5);
-    if (t > tB) { // a burst of 1-6 bubbles: short rising blips, smaller bubbles higher and shorter
+    if (t > tB && ly < -0.5) { // a burst of 1-6 bubbles (under the water): short rising blips, smaller bubbles higher and shorter
       let tt = t;
       for (let n = 1 + rnd() * rnd() * 6 | 0; n--;) { const f = rr(380, 1300); play(bub, tt, f, f * rr(1.4, 2.2), 0.05 + 40 / f, rr(0.03, 0.08), 0.006); tt += rr(0.07, 0.2); }
       tB = tt + rr(0.5, 5);

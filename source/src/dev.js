@@ -34,6 +34,6 @@
         // a benchmark hides the stats line and holds the resolution: dynT at -Infinity keeps frame() from tuning it
         if (bench) { hud = false; info.textContent = ''; dynT = -Infinity; }
       }
-    } else if (/Digit[1-6]/.test(e.code)) stop();
+    } else if (/Digit[1-7]/.test(e.code)) stop();
   });
 }

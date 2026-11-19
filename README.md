@@ -22,6 +22,7 @@ Nothing to install, and it works offline. It needs a browser with **WebGPU**. If
 - **A sunken wooden ship**, a **giant stone whale tail**, rock arches, canyons and floating boulders
 - **Manta rays**, schools of fish, rising bubbles and drifting particles
 - **A purple grotto** with glowing magenta ground cover, coral and barrel sponges
+- **Sandy islands** that rise out of the sea: swim up a sandy slope, wade ashore and walk or run over the dunes under an open sky
 - **A soundscape** made up as you listen: a deep rumble, distant whale calls, soft chimes and bubbles
 
 | | |
@@ -36,16 +37,19 @@ Nothing to install, and it works offline. It needs a browser with **WebGPU**. If
 | | Keyboard & mouse |
 |---|---|
 | Look around | Move the mouse |
-| Swim | `W` `A` `S` `D` |
-| Up / down | `E` / `Q` |
-| Swim faster | Hold `Shift` |
-| Jump to a viewpoint | `1` to `6` (the spots in the screenshots) |
+| Swim (or walk, on an island) | `W` `A` `S` `D` |
+| Up / down (jump, on an island) | `E` / `Q` |
+| Swim faster (run, on an island) | Hold `Shift` |
+| Jump to a viewpoint | `1` to `6` (the spots in the screenshots), `7` the beach of the nearest island |
 | Menu | `Esc` releases the mouse and opens the menu with the list of controls; **Resume** takes you back |
 | Sound on / off | `M` (sound starts when you dive in) |
 | Performance stats | `H` |
+| Map on / off | `N` (north is up; the line under it gives your position, depth and heading) |
 | Detail level | **Low**, **Medium** or **High** in the menu (reloads the page) |
 
 The sea has no edge: keep swimming and new seabed, kelp, rocks and fish are made ahead of you, while what you left behind is let go. The hand-made scenes (the ship, the whale tail, the grotto) are around where you start. Press `1` to `6` to jump back to them.
+
+Every few hundred metres a sandy island rises out of the sea; the first is about 200 m east of where you start. The map in the corner shows the islands around you, out to 400 m. Swim into its shallows and you stand up and walk ashore at eye height; walk back into water deeper than you are tall and you swim again.
 
 The seabed, cliffs and arches are solid: you glide along the rock instead of swimming into it, and you still fit through every tunnel and arch. Kelp, plants, corals, sponges, loose rocks, the floating boulders, the ship and the whale tail you can swim through.
 
@@ -66,6 +70,8 @@ If loading crashes the tab, or the graphics driver gives up, the page starts aga
 ## How it works
 
 - The seabed is sculpted on your graphics card as you swim, in square chunks 96 m across: the chunks within about 200 m of you are kept, each is made from the same seed every time (so a place you come back to is the same place), and each is decorated with kelp, plants, rocks, sponges, corals and fish. Building a chunk is cut into small steps between frames, so swimming stays smooth. Only the part of the sea around you is in memory, however far you go (the noise stays clean for tens of kilometres).
+- The surface overhead is a moving ocean swell: eight waves of 9 to 150 m, each travelling at its natural speed (long swells outrun the short chop), add up to swells of up to about two metres from trough to crest. Just under the surface you rise and fall with them.
+- Islands are a height profile laid over the rock as smooth sand: a ring of dunes with a wandering coastline, a gently shelving beach, and a sandy slope down to the sea floor. Above the water the scene switches to daylight: a sky with drifting clouds, sunlight without the water's absorption, light haze, and a see-through sea that reflects the sky, sparkles in the sun and foams where the swell runs up the beach.
 - Everything is drawn with **WebGPU** directly. No game engine or 3D library is used.
 - The ship, whale tail, mantas, fish and corals are built from simple mathematical shapes.
 - The sound is synthesized live with the Web Audio API.

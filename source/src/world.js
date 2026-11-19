@@ -72,7 +72,9 @@ function chunkPrims(ci, cj) {
   for (const m of arches) a.push(m[0], m[1], m[2], m[3], m[4], m[5], m[6], 0);
   for (const m of holes) a.push(m[0], m[1], m[2], m[3], m[4], m[5], m[6], 0);
   for (const m of clears) a.push(m[0], m[1], m[2], m[3], m[4], m[5], 0, 0);
-  return { data: new Float32Array(a.length ? a : [0, 0, 0, 0]), n: [mesas.length, arches.length, holes.length, clears.length] };
+  const isles = islesNear(x0 - mg, z0 - mg, x1 + mg, z1 + mg);
+  for (const m of isles) a.push(m[0], m[1], m[2], m[3], m[4], m[5], m[6], 0);
+  return { data: new Float32Array(a.length ? a : [0, 0, 0, 0]), n: [mesas.length, arches.length, holes.length, clears.length, isles.length], isles };
 }
 
 // ---------------------------------------------------------------- terrain mesh from a chunk's density grid
@@ -286,7 +288,7 @@ function* makeChunk(D, T, ci, cj) {
     const a = rnd() * TAU, r = sqrt(rnd()) * p[2], x = p[0] + cos(a) * r, z = p[1] + sin(a) * r;
     if (rnd() > magAt(x, z) + 0.12 || !inC(x, z) || nearPose(x, z)) continue;
     const f = floorsAt(x, z); if (!f.length) continue;
-    const y = f[f.length - 2]; if (grad(x, y, z)[1] < 0.7) continue;
+    const y = f[f.length - 2]; if (y > -4 || grad(x, y, z)[1] < 0.7) continue;
     const nl = 2 + (rnd() * 3 | 0), yw = rnd() * TAU;
     for (let j = 0; j < nl; j++) leaf(small, x, y - 0.03, z, rr(0.08, 0.26), yw + j * TAU / nl + rr(-0.4, 0.4), rr(0.15, 0.85), rr(0.035, 0.07), 0, 5, rnd(), rnd(), rr(0.3, 0.7));
     if (rnd() < 0.3) for (let j = 0; j < 2; j++) leaf(small, x + rr(-0.2, 0.2), y - 0.04, z + rr(-0.2, 0.2), rr(0.2, 0.55), rnd() * TAU, rr(0.05, 0.6), rr(0.03, 0.06), 0, 7, rnd(), rnd(), rr(0.3, 0.8));
@@ -298,7 +300,7 @@ function* makeChunk(D, T, ci, cj) {
     const k = pickV(), ny = T.wn[k + 1];
     if (ny < 0.72) continue;
     const x = T.wp[k] + rr(-0.45, 0.45), z = T.wp[k + 2] + rr(-0.45, 0.45), y = T.wp[k + 1];
-    if (nearPose(x, z)) continue;
+    if (y > -4 || nearPose(x, z)) continue;
     const m = magAt(x, z), zp = zoneP(x, z), u = rnd();
     if (m > 0.3 && u < m * 0.9) for (let j = 0; j < 4; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.12, 0.34), rnd() * TAU, rr(0.05, 0.75), rr(0.04, 0.08), 0, 5, rnd(), rnd(), rr(0.3, 0.7));
     else if (u < m * 0.9 + 0.5 * max(zp, hot(x, z)) * sstep(0.42, 0.6, fbm(x * 0.09, 9, z * 0.09, 2))) for (let j = 0; j < 3; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.25, 0.7), rnd() * TAU, rr(0.1, 0.8), rr(0.05, 0.1), 0, 7, rnd(), rnd(), rr(0.3, 0.8));
@@ -364,7 +366,7 @@ function* makeChunk(D, T, ci, cj) {
   if (rnd() < 9 * AREA * 4) boulders([X0 + rr(16, CHK - 16), rr(-20, -9), Z0 + rr(16, CHK - 16), 10 + rnd() * 12 | 0, rr(5, 9)], 100 + ((ci * 31 + cj) & 255));
   cs(9);
   for (let i = 0; i < 2600 * AREA && nCore; i++) {
-    const k = pickV(); if (T.wn[k + 1] < 0.7 || nearFly(T.wp[k], T.wp[k + 1], T.wp[k + 2], 6)) continue;
+    const k = pickV(); if (T.wn[k + 1] < 0.7 || T.wp[k + 1] > -2 || nearFly(T.wp[k], T.wp[k + 1], T.wp[k + 2], 6)) continue;
     const sc = rr(0.25, 1.3) * (rnd() < 0.1 ? 2 : 1);
     solid(rnd() * 4 | 0, T.wp[k], T.wp[k + 1] + sc * 0.2, T.wp[k + 2], sc, qRand(), 1, rnd(), 1, 0);
   }
@@ -381,7 +383,7 @@ function* makeChunk(D, T, ci, cj) {
   for (let i = 0; i < 170000 * AREA && nCore; i++) { // pebbles and rubble on the sea floor
     if (!(i & 1023)) yield;
     const k = pickV(), x = T.wp[k] + rr(-0.4, 0.4), z = T.wp[k + 2] + rr(-0.4, 0.4), y = T.wp[k + 1];
-    if (T.wn[k + 1] < 0.8 || nearFly(x, y, z, 1.3)) continue;
+    if (T.wn[k + 1] < 0.8 || y > -2 || nearFly(x, y, z, 1.3)) continue;
     const sc = 0.05 + 0.3 * pow(rnd(), 2), q = qRand();
     nth++ % THIN || chunks[6][cellOf(x, z)].push(x, y - sc * 0.25, z, sc, q[0], q[1], q[2], q[3], 1, rnd(), 44, 0);
   }
@@ -442,11 +444,30 @@ function* makeChunk(D, T, ci, cj) {
     const t = Lp; Lp = Ln; Ln = t;
   }
 
-  // --- ground map of the chunk: r magenta cover, b purple zone, a sand
+  // --- palm trees on the islands: groves on the dry sand, thickest along the beaches, leaning out to sea
+  const isles = islesNear(X0, Z0, X1, Z1), palms = [];
+  cs(16);
+  if (isles.length) for (let gx = X0 + 3; gx < X1; gx += 6) for (let gz = Z0 + 3; gz < Z1; gz += 6) {
+    const x = gx + rr(-2.6, 2.6), z = gz + rr(-2.6, 2.6), u = rnd(), sc = rr(0.7, 1.15), sd = rnd(), turn = rr(-0.9, 0.9), tilt = rr(-0.08, 0.16);
+    const ih = isleH(isles, x, z);
+    if (ih < 1.4) continue;
+    const grove = sstep(0.4, 0.6, fbm(x * 0.045, 13, z * 0.045, 2)), beach = sstep(4.5, 1.8, ih);
+    if (u > (0.14 + 0.6 * grove) * (0.5 + 0.5 * beach)) continue;
+    const f = floorsAt(x, z); if (!f.length || nearPose(x, z, 6)) continue;
+    let lo = f[0] - 1, hi = f[0] + 1; for (let k = 0; k < 12; k++) { const m = (lo + hi) / 2; if (Dw(x, m, z) > 0) lo = m; else hi = m; }
+    if (abs(lo - ih) > 0.8 || grad(x, lo, z)[1] < 0.8) continue; // on the island's own sand, fairly flat
+    let I = isles[0], bd = 1e9; for (const J of isles) { const d = hypot(x - J[0], z - J[1]); if (d < bd) { bd = d; I = J; } }
+    // the mesh leans towards +x: turn that away from the island's middle
+    const q = qMul(qAxis(0, 1, 0, atan2(-(z - I[1]), x - I[0]) + turn), qAxis(0, 0, 1, -tilt));
+    palms.push(x, lo - 0.2, z, sc, q[0], q[1], q[2], q[3], 6, sd, 1, 0);
+  }
+
+  // --- ground map of the chunk: r magenta cover, g island ground height (0: none, else -48 + 64 g m), b purple zone, a sand
   const gm = new Uint8Array(128 * 128 * 4);
   for (let j = 0; j < 128; j++) for (let i = 0; i < 128; i++) {
     const x = X0 + (i + 0.5) / 128 * CHK, z = Z0 + (j + 0.5) / 128 * CHK, o = (i + 128 * j) * 4;
     gm[o] = magAt(x, z) * 255; gm[o + 2] = zoneP(x, z) * 255; gm[o + 3] = sstep(0.42, 0.6, fbm(x * 0.04, 3, z * 0.04, 3)) * 255;
+    if (isles.length) gm[o + 1] = clamp(round((isleH(isles, x, z) + 48) / 64 * 255), 0, 255);
   }
 
   // --- fish schools + mantas
@@ -534,7 +555,7 @@ function* makeChunk(D, T, ci, cj) {
     for (let c = 0; c < nCells; c++) { const a = L[c]; for (let i = 0; i < a.length; i += 12) { for (let j = 0; j < 12; j++) data[k++] = a[i + j]; lo[c] = min(lo[c], a[i + 1] - 3); hi[c] = max(hi[c], a[i + 1] + 3); } }
     return { data, n, start, lo, hi };
   };
-  return { glints: new Float32Array(glints), chunks: chunks.map(packC), props: props.map(packC), big: pack(big), bigF: pack(big, 2, 1.5), small: pack(small), solids: { data: new Float32Array(sol.data), ranges: sol.ranges }, bubbles: new Float32Array(bubbles), volD, gm, fish: new Float32Array(fish), mantas: new Float32Array(mantas), sharks: new Float32Array(sharks), dolphins: new Float32Array(dolphins), tunas: new Float32Array(tunas), crawl: crawl.map((c) => new Float32Array(c)), barras: barras.map((b) => new Float32Array(b)), turtles: turtles.map((t) => new Float32Array(t)), reef: reef.map((t) => new Float32Array(t)), ci, cj };
+  return { glints: new Float32Array(glints), chunks: chunks.map(packC), props: props.map(packC), big: pack(big), bigF: pack(big, 2, 1.5), small: pack(small), solids: { data: new Float32Array(sol.data), ranges: sol.ranges }, bubbles: new Float32Array(bubbles), palms: new Float32Array(palms), volD, gm, fish: new Float32Array(fish), mantas: new Float32Array(mantas), sharks: new Float32Array(sharks), dolphins: new Float32Array(dolphins), tunas: new Float32Array(tunas), crawl: crawl.map((c) => new Float32Array(c)), barras: barras.map((b) => new Float32Array(b)), turtles: turtles.map((t) => new Float32Array(t)), reef: reef.map((t) => new Float32Array(t)), ci, cj };
 }
 const fract = (x) => x - floor(x);
 
@@ -841,6 +862,28 @@ function meshReef(kind) {
 }
 // seafloor crawlers, aux = how much a vertex moves with the walking legs (0 body, -1 eyes). 0 crab (walks sideways, +x is the
 // claw end), 1 spiny lobster (walks forward, long antennae). About 0.4 m across.
+// palm tree, about 8 m tall: a ringed trunk curving over towards +x, and a crown of drooping fronds with jagged edges
+// (leaflets). aux (normal.w) < 0 on the trunk, and runs 0 -> 1 from a frond's base to its tip.
+function meshPalm() {
+  const m = new Mesh(), H = 8, N = 12, pts = [];
+  for (let k = 0; k <= N; k++) { const t = k / N; pts.push([1.5 * t * t, H * t, 0]); }
+  m.tube(pts, (k) => 0.19 * (1 - 0.3 * k / N) + 0.13 * max(0, 1 - k / 1.5), 9, true, (k) => -0.2 - 0.6 * k / N);
+  const top = pts[N];
+  rseed(77);
+  for (let f = 0, NF = 11; f < NF; f++) {
+    const a = f / NF * TAU + rr(-0.2, 0.2), up = rr(0.05, 0.6), L = rr(3.3, 4.4), dx = cos(a), dz = sin(a), S = 18;
+    let prev = null;
+    for (let s = 0; s <= S; s++) {
+      const u = s / S, r = 0.15 + L * u, y = top[1] + 0.2 + L * (up * u - 0.62 * u * u);
+      const w = 0.72 * pow(sin(PI * min(1, u * 1.1 + 0.04)), 0.7) * (s & 1 ? 0.4 : 1), sag = 0.3 * w, aux = 0.05 + 0.9 * u;
+      const cx = top[0] + dx * r, cz = top[2] + dz * r;
+      const ring = [m.v(cx - dz * w, y - sag, cz + dx * w, aux), m.v(cx, y, cz, aux), m.v(cx + dz * w, y - sag, cz - dx * w, aux)];
+      if (prev) { m.quad(prev[0], prev[1], ring[1], ring[0]); m.quad(prev[1], prev[2], ring[2], ring[1]); }
+      prev = ring;
+    }
+  }
+  return m;
+}
 function meshCrawler(kind) {
   const m = new Mesh();
   const leg = (pts, r, w0 = 0.35, w1 = 1) => m.tube(pts, (k) => r * (1 - 0.5 * k / (pts.length - 1)), 5, true, (k) => w0 + (w1 - w0) * k / (pts.length - 1));
